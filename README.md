@@ -31,7 +31,7 @@
 
  ## Installation
 
- This will be published at a later point in time. Please review the **rtc-design.pptx** file for now. Please contact us for further explanantion.
+ This will be published at a later point in time. Please review the **rtc-design.pdf** file for now. Please contact us for further explanantion.
 
  ## Authors
 
