@@ -4,7 +4,14 @@
 
  The created system contained 3 major components. The first component is responsible for retrieving and correlating the security events, and quarantining the endpoints. The second component takes care of controlling the database that contained the contextual information about the quarantined endpoints. The last component is in charge of the created GUI, which also has some functionality to query additional information, cross-launch into CTR, and to unquarantine the endpoints.
 
- ## Solution Components
+## Release notes RTC version 2.0
+* AMP Host Isolation added 
+* Stealthwatch Source/Target identification enhancement
+* Cisco Threat Response API usage for more enrichement
+* On / off premise detection (Umbrella and AMP Hostname usage)
+* More instructions will be added soon!!!
+
+## Solution Components
 
  The system in more detail with an example workflow:
 
@@ -24,18 +31,17 @@
 
  ### Cisco Products / Services
 
- * Cisco Identity Services Engine
+* Cisco Identity Services Engine
 * Cisco Stealthwatch
 * Cisco Umbrella
 * Cisco Advanced Malware Protection for Endpoints
+* Cisco Threat Response
 
  ## Installation
 
- This will be published at a later point in time. Please review the **rtc-design.pdf** file for now. Please contact us for further explanantion.
+ This will be published at a later point in time. Please review the **system_overview.pdf** file for now. Please contact us for further explanantion.
 
  ## Authors
 
- * Hakan Nohre
-* Andre Lambertsen
-* Ed McNicholas
+* Hakan Nohre
 * Christopher van der Made
