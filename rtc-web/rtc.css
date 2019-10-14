@@ -87,13 +87,7 @@ p {
 #divLabrats {
     display: inline;
     float:left;
-    width:40%;
-    height: 15%;
-}
-#divUserInfo {
-    display: inline;
-    float:left;
-    width:30%;
+    width:70%;
     height: 15%;
 }
 #divRetCode {
@@ -101,7 +95,15 @@ p {
     float:left;
     width:30%;
     height: 15%;
+    font-size: 20px;    
 }
+#divChild {
+    display: inline;
+    float:left;
+    width:100%;
+    height: 85%;
+}
+
 .divNotesName {
     font-size: 24px;
     padding: 5px;
@@ -281,10 +283,16 @@ input[type=submit]:hover {
 {
     float : left;
         display:  inline;
-	border: 2px solid black;
+/*	border: 2px solid black; */
        /* border-collapse:separate;*/
     }
 
+  .divDetails
+  {
+      margin-left: 6px;
+      display:inline;
+      float: left;
+    }
 
 .divHeadRow
     {
@@ -329,15 +337,6 @@ input[type=submit]:hover {
     }
 
 
-  .divDetails
-  {
-      margin-left: 6px;
-      display:inline;
-      float: left;
-        width:55%;
-
-
-    }
 
   .divLeft
     {
