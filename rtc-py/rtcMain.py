@@ -11,11 +11,6 @@ import getopt
 import os
 import rtclogger
 
-def exception_info(err):
-    exc_type, exc_obj, exc_tb = sys.exc_info()
-    fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
-    estring = "{} {} {} {}".format(err,exc_type, fname, exc_tb.tb_lineno)
-    return estring
 
 def inOurNetwork(ip):
     ###
@@ -30,37 +25,250 @@ def inOurNetwork(ip):
         return True
     if ipaddress.ip_address(ip) in ipaddress.ip_network("192.168.0.0/16"):
         return True
+    if ipaddress.ip_address(ip) in ipaddress.ip_network("194.16.1.240/28"):
+        return True
     return False
     
 
 
+class rtcBASE():
+    
+    def __init__(self,name,thresholdLogLevel,logfilename):
+
+        try:
+            self.logger = rtclogger.LOGGER(name,thresholdLogLevel,logfilename)    
+            self.logger.log_debug(0,"starting {} thread with log level {}".format(name,str(thresholdLogLevel)))    
+            self.db = rtcdb.RTCDB()
+            dbresult = self.db.getRTCconfig()
+            self.rtcConfig = json.loads(dbresult["configstring"])
+            self.threshold = self.rtcConfig["rtcThreshold"]        
+            dbresult = self.db.getISEconfig()
+            creds = json.loads(dbresult["configstring"])
+            ISE_SERVER = creds["ise_server"]
+            ISE_USERNAME = creds["ise_username"]
+            ISE_PASSWORD = creds["ise_password"]
+            PXGRID_CLIENT_CERT = creds["pxgrid_client_cert"]
+            PXGRID_CLIENT_KEY = creds["pxgrid_client_key"]
+            PXGRID_CLIENT_KEY_PASSWORD = creds["pxgrid_client_key_pw"]
+            PXGRID_SERVER_CERT = creds["pxgrid_server_cert"]
+            PXGRID_NODENAME = creds["pxgrid_nodename"]
+            self.pxgrid = cats.ISE_PXGRID(server=ISE_SERVER,username=ISE_USERNAME,password=ISE_PASSWORD,debug=False,logfile="",clientcert=PXGRID_CLIENT_CERT,clientkey=PXGRID_CLIENT_KEY,clientkeypassword=PXGRID_CLIENT_KEY_PASSWORD,servercert=PXGRID_SERVER_CERT,nodename=PXGRID_NODENAME)
+
+            self.ise_anc = cats.ISE_ANC(ISE_SERVER,ISE_USERNAME,ISE_PASSWORD,debug=False)
+            self.ancpolicy = self.rtcConfig["rtcPolicyName"]
+            dbresult = self.db.getUMBRELLAconfig()
+            creds = json.loads(dbresult["configstring"])
+
+            UMB_investigate_token = creds["u_investigate_token"]
+            UMB_enforce_token = creds["u_enforce_token"]
+            UMB_orgid = creds["u_orgid"]
+            UMB_secret = creds["u_secret"]
+            UMB_key = creds["u_key"]
+    
+            self.umb = cats.UMBRELLA(investigate_token=UMB_investigate_token,enforce_token=UMB_enforce_token,key=UMB_key,secret=UMB_secret,orgid=UMB_orgid,debug=False)
+
+            dbresultAMP = self.db.getAMPconfig()
+            credsAMP = json.loads(dbresultAMP["configstring"])    
+            AMP_cloud = "us"
+
+            AMP_api_client_id = credsAMP["amp_api_client_id"] 
+            AMP_api_key = credsAMP["amp_api_key"]
+            self.amp = cats.AMP(cloud=AMP_cloud,api_client_id=AMP_api_client_id,api_key=AMP_api_key,debug=False,logfile="")
 
 
-def RtcSW(swlogger,ancpolicy,rtcConfig,db,sw,ise_anc,pxgrid):
+            dbresultSW = self.db.getSWconfig()
+            credsSW = json.loads(dbresultSW["configstring"])    
+            SW_server = credsSW["sw_server"]  
+            SW_username = credsSW["sw_username"]  
+            SW_password = credsSW["sw_password"]
+        
+            self.sw = cats.SW(SW_server,SW_username,SW_password,debug=False,logfile="") 
 
-    # retrieve config for penalties
-    threshold = rtcConfig["rtcThreshold"]
-    penaltiesSW = rtcConfig["swEventsConfig"] ### HAKAN: is it called this?
+        except Exception as err:
+            self.logger.log_debug(0,self.logger.exception_info(err))
+            
+    def getISEcontext(self,ip):
+        mac = ""
+        username = ""
+        rsp = self.pxgrid.getSessions(ip=ip)
+        if rsp:
+#            print(json.dumps(rsp,indent=4,sort_keys=True))
+            if "macAddress" in rsp:
+                mac  = rsp["macAddress"]
+            else:
+                self.logger.log_debug(2,"Username {} not known by ISE pxgrid".format(ip))                
+            if "userName" in rsp:
+                username = rsp["userName"]
+            else:
+                self.logger.log_debug(2,"Username {} not known by ISE pxgrid".format(ip))
+        return (mac,username)
+    
+    def loopEvents(self):
 
-    # use cats to query security events, then filter for SW_category events and put into dict
-    SW_rsp = sw.searchSecurityEvents(days=0,hours=0,minutes=1,sourceip="",targetip="",wait=3) ### Time window should be shortened, and script should run as daemon
-    try:
-        SW_sec_events = SW_rsp["data"]["results"]
-    except:
-        ## no events fetched this time        
-        swlogger.log_debug(3,"No events this loop")
-        return
-    # loop through all SW events
-    for event in SW_sec_events:
-# check what is direction
+        self.logger.log_debug(7,"Trying to Get Events ")
+        events = self.getEvents()
+
+        self.logger.log_debug(7,"Got Events {}".format(json.dumps(events)))
+        try:
+            for event in events:
+
+                self.logger.log_debug(7,"Looping through events ")
+                self.logger.log_debug(4,"Event {}".format(json.dumps(event)))                
+                penaltyMac = self.getPenaltyForEvent(event)
+                if penaltyMac == 0:
+                    self.logger.log_debug(7,"No penalty for event")                    
+                    continue
+
+                hostnamePunished = False
+                usernamePunished = False
+                eventDetailsArr  = self.getInfoFromEvent(event)
+                for eventDetails in eventDetailsArr:
+                    '''
+AMP can return a number of MAC,IP for one event
+... each MAC, IP should increase penalty
+... hostname should only be punished, i.e increase penalty once
+... username should only be punished, i.e. increase penalty once
+'''
+                    thishostname = eventDetails["hostname"]
+                    observable   = eventDetails["observable"]
+                    thisIP       = eventDetails["ip"]
+                    
+                    (thismac,thisusername) = self.getISEcontext(thisIP)
+                    self.logger.log_debug(4,"ISE info mac {} username {}".format(thismac,thisusername))                                    
+                    if not self.isEventStored(mac=thismac,user=thisusername,ip=thisIP,hostname=thishostname,observable=observable):
+                
+
+                        self.logger.log_debug(2,"New event found - {},{},{},{}".format(thismac,thisIP,thisusername,json.dumps(eventDetails)))
+                        self.storeEvent(mac=thismac,user=thisusername,ip=thisIP,hostname=thishostname,observable=observable,penalty=penaltyMac,eventstring=json.dumps(eventDetails))            
+                        if thismac:                                                                                                   
+                            self.db.updateHost(mac=thismac,penalty=penaltyMac)
+                            dbresult = self.db.getHosts(mac=thismac)
+                            thishost = dbresult["hosts"][0]
+                            if int(thishost["penalty"]) >= int(self.threshold):
+                                self.logger.log_debug(0,"Applying ANC policy for IP {} MAC {}".format(thisIP,thismac))
+                                self.ise_anc.applyPolicy(thisIP,thismac,self.ancpolicy)
+                        if thisusername and not usernamePunished:
+                            self.db.updateUser(user=thisusername,penalty=penaltyMac)
+                            usernamePunished = True
+                        if thisIP:
+                            self.db.updateIP(ip=thisIP,penalty=penaltyMac)
+                        if thishostname and not hostnamePunished:
+                            hostnamePunished = True
+                            self.logger.log_debug(2,"Inserting Hostname event {} penalty {}".format(thishostname,penaltyMac))
+                            self.db.updateHostname(hostname=thishostname,penalty=penaltyMac)
+
+                            hostnames = self.db.getHostnames(hostname=thishostname)
+                            if int(hostnames["hostnames"][0]["penalty"]) >= int(self.threshold):
+                                self.amp.startHostIsolation(eventDetails["AMP_connector_guid"])
+                        else:
+                            self.logger.log_debug(2,"Hostname not there or already punished, Not Inserting Hostname event {} penalty {}".format(thishostname,penaltyMac))
+                
+                    else:
+                        self.logger.log_debug(4,"Event from this mac/user/IP/hostname to this observable already in DB")
+                
+        except Exception as err:
+            self.logger.log_debug(0,self.logger.exception_info(err))
+    
+        
+class rtcUMB(rtcBASE):
+    def __init__(self,threadname,logthreshold,logfilename):
+        rtcBASE.__init__(self,threadname,logthreshold,logfilename)
+        self.penalties = self.rtcConfig["umbrellaEventsConfig"]
+
+    def getEvents(self):
+        UMB_rsp = self.umb.reportSecurityActivity(days=0,hours=0,minutes=1) 
+        self.logger.log_debug(7,"Got SecurityActivity response")
+
+        if UMB_rsp["catsresult"] == "OK":
+            events = UMB_rsp["requests"]
+            return events
+        else:
+            self.logger.log_debug(0,"Error in getting security report" + rsp["info"])
+            raise ValueError('Error in getting security report')
+
+    def getPenaltyForEvent(self,event):
+        total = 0
+        for penalty in self.penalties:
+            if penalty["event_name"] in event["categories"]:
+                total += int(penalty["penalty"])
+        return total
+        
+    def getInfoFromEvent(self,event):
+        internalIP = event["internalIp"]
+        observable = event["destination"]
+        thishostname = ""
+        if event["originType"] == "Anyconnect Roaming Client":
+            thishostname = event["originLabel"]
+        eventDetails = {
+            'observable': observable,
+            'mac' : "",
+            'ip' : internalIP,
+            'hostname' : thishostname,
+            'username' : "",
+            'UMB_externalIp' : event["externalIp"],
+            'UMB_destination' : observable,
+            'UMB_datetime' : event["datetime"],
+            'UMB_category' : event["categories"],
+
+            }
+        eventDetailsArr = []
+        eventDetailsArr.append(eventDetails)
+        return (eventDetailsArr)
+    
+    def isEventStored(self,mac="",user="",ip="",hostname="",observable=""):
+        rsp = self.db.getUMBevents(mac=mac,user=user,ip=ip,hostname=hostname,observable=observable)                      
+        if rsp["events"]:
+            return True
+        return False
+    
+    def storeEvent(self,mac="",user="",ip="",hostname="",observable="",penalty=0,eventstring=""):
+        self.db.insertUMBevent(mac=mac,user=user,ip=ip,hostname=hostname,observable=observable,penalty=penalty,eventstring=eventstring)
+
+class rtcSW(rtcBASE):
+    def __init__(self,threadname,logthreshold,logfilename):
+        rtcBASE.__init__(self,threadname,logthreshold,logfilename)
+        self.penalties = self.rtcConfig["swEventsConfig"]
+
+    def getPenaltyForEvent(self,event):
+        total = 0
+        for penalty in self.penalties:
+            if str(penalty["eventid"]) == str(event["securityEventType"]):
+                total += int(penalty["penalty"])
+        return total
+    
+    def getEvents(self):
+        SW_rsp = self.sw.searchSecurityEvents(days=0,hours=0,minutes=1,sourceip="",targetip="",wait=3)
+        try:
+            events = SW_rsp["data"]["results"]
+            return events
+        except:
+            self.logger.log_debug(3,"No events this loop")
+            return []
+        
+    def isEventStored(self,mac="",user="",ip="",hostname="",observable=""):
+        rsp = self.db.getSWevents(mac=mac,user=user,ip=ip,hostname=hostname,observable=observable)                      
+        if rsp["events"]:
+            return True
+        return False
+
+    def storeEvent(self,mac="",user="",ip="",hostname="",observable="",penalty=0,eventstring=""):
+        self.db.insertSWevent(mac=mac,user=user,ip=ip,hostname=hostname,observable=observable,penalty=penalty,eventstring=eventstring)
+
+    def getInfoFromEvent(self,event):
+        thishostname = ""   ### not available from SW events, unless revdns?
         internalIP = event["source"]["ipAddress"]
         if not inOurNetwork(internalIP):
             internalIP = event["target"]["ipAddress"]
             observable = event["source"]["ipAddress"] ### TO-DO based on event type, observable might be different
         else:
             observable = event["target"]["ipAddress"] ### TO-DO based on event type, observable might be different
-
+        
         eventDetails = {
+            'observable': observable,
+            'mac' : "",
+            'ip' : internalIP,
+            'hostname' : "",
+            'username' : "",
             'SW_first_active' : event["firstActiveTime"],
             'SW_last_active' : event["lastActiveTime"],
             'SW_source_IP' : internalIP,
@@ -71,434 +279,87 @@ def RtcSW(swlogger,ancpolicy,rtcConfig,db,sw,ise_anc,pxgrid):
             'SW_destination_protocol' : event["target"]["protocol"],
             'SW_security_event_ID' : event["securityEventType"]
             }
-        
-        swlogger.log_debug(4,format(json.dumps(event)))
-
-        # check if in our internal network, otherwise, could not care less
-        
-        ## findout if we are getting a penalty for this event type, otherwise dont care
-        penaltyMac = 0
-        for alarm in penaltiesSW:
-            swlogger.log_debug(3,"eventid is {} securityEventType is {}".format(alarm["eventid"],event["securityEventType"]))
-            if str(alarm["eventid"]) == str(event["securityEventType"]):
-                penaltyMac += int(alarm["penalty"])
-        if penaltyMac == 0:
-            # no need to continue and insert events in db if penalty is 0
-            continue
-        
-        rsp = pxgrid.getSessions(ip=internalIP)
-        if rsp:
-            thismac  = rsp["macAddress"]
-            thisuser = rsp["userName"]
-            ## Hakan, for now do track IPs if we can track MAC and user
-            thisIP = internalIP            
-        else:
-            ## Hakan added keeping track of IPs, even if not known by pxGrid, i.e. MAC or user not found
-            swlogger.log_debug(2,"IP {} not known by ISE pxgrid".format(internalIP))
-            thismac = ""
-            thisuser = ""
-            thisIP = internalIP
-            
-
-        # check if there was an event with this observable already, for this user/mac/ip (this should be more harsh, extra penalties if observable was seen longer than x amount of time!)
-        # db.getSWevents should take care of whether mac, user, ip is empty or not
-        rsp = db.getSWevents(mac=thismac,user=thisuser,ip=thisIP,observable=observable)
-        if not rsp["events"]:
-            # this event with this observable has not happened before, so apply penalty!
-            swlogger.log_debug(3,"New event found {}".format(json.dumps(eventDetails)))
-            db.insertSWevent(mac=thismac,user=thisuser,ip=thisIP,observable=observable,penalty=penaltyMac,eventstring=json.dumps(eventDetails))
-            # check if there is a mac address, and if so insert event in DB, update host and do ANC if needed
-            if thismac:
-
-                db.updateHost(mac=thismac,penalty=penaltyMac)
-
-                # grab current penalties for the host
-                dbresult = db.getHosts(mac=thismac)
-                thishost = dbresult["hosts"][0]
-                # check if penalties are equal or higher then threshold
-                if int(thishost["penalty"]) >= int(threshold):
-                    swlogger.log_debug(1,"Applying ANC policy for IP {} MAC {} Policy {}".format(internalIP,thismac,ancpolicy))
-                    ise_anc.applyPolicy(internalIP,thismac,ancpolicy)
-            # update user
-            if thisuser:
-                db.updateUser(user=thisuser,penalty=penaltyMac)
-            if thisIP:
-                db.updateIP(ip=thisIP,penalty=penaltyMac)
-        else:
-            swlogger.log_debug(3,"SW event from this mac/user to this observable already in DB")
-
-# main function
-def mainSW(threadName,thresholdLogLevel,logfilename):
-    swlogger = rtclogger.LOGGER("SW",thresholdLogLevel,logfilename)
-    swlogger.log_debug(0,"starting SW thread with log level {}".format(str(thresholdLogLevel)))
-    db = rtcdb.RTCDB()
-    dbresult = db.getRTCconfig()
-    rtcConfig = json.loads(dbresult["configstring"])
-    dbresult = db.getISEconfig()
-    creds = json.loads(dbresult["configstring"])
-    ISE_SERVER = creds["ise_server"]
-    ISE_USERNAME = creds["ise_username"]
-    ISE_PASSWORD = creds["ise_password"]
-    PXGRID_CLIENT_CERT = creds["pxgrid_client_cert"]
-    PXGRID_CLIENT_KEY = creds["pxgrid_client_key"]
-    PXGRID_CLIENT_KEY_PASSWORD = creds["pxgrid_client_key_pw"]
-    PXGRID_SERVER_CERT = creds["pxgrid_server_cert"]
-    PXGRID_NODENAME = creds["pxgrid_nodename"]
-    pxgrid = cats.ISE_PXGRID(server=ISE_SERVER,username=ISE_USERNAME,password=ISE_PASSWORD,debug=False,logfile="",clientcert=PXGRID_CLIENT_CERT,clientkey=PXGRID_CLIENT_KEY,clientkeypassword=PXGRID_CLIENT_KEY_PASSWORD,servercert=PXGRID_SERVER_CERT,nodename=PXGRID_NODENAME)
-
-    # from cats.py create object to do ISE ANC's with
-    ise_anc = cats.ISE_ANC(ISE_SERVER,ISE_USERNAME,ISE_PASSWORD,debug=False)
-    ancpolicy = rtcConfig["rtcPolicyName"]
-
-    # retrieve credentials
-    dbresult = db.getSWconfig()
-    creds = json.loads(dbresult["configstring"])
-
-    SW_server = creds["sw_server"]  
-    SW_username = creds["sw_username"]  
-    SW_password = creds["sw_password"]  
-
-    debug = False
-    # Create SW object to retrieve events
-    sw = cats.SW(SW_server,SW_username,SW_password,debug=debug,logfile="") 
-
-    # create infinite loop, set to 50 seconds, smaller than the interval of one minue for which we retreive events
-    while True:
-        try:
-            RtcSW(swlogger,ancpolicy,rtcConfig,db,sw,ise_anc,pxgrid)
-            time.sleep(50)
-        except Exception as err:
-            swlogger.log_debug(0,exception_info(err))
-            
-        
-def RtcUMB(umblogger,ancpolicy,rtcConfig,db,umb,amp,ise_anc,pxgrid):
-
-    
-    # retrieve config for penalties
-    threshold = rtcConfig["rtcThreshold"]
-    penaltiesUMB = rtcConfig["umbrellaEventsConfig"]
-
-    # use cats to query security activity, then filter for UMB_category events and put into dict
-
-    UMB_rsp = umb.reportSecurityActivity(days=0,hours=0,minutes=1) ### Time window should be shortened, and script should run as daemon
-    umblogger.log_debug(7,"Got SecurityActivity response")
-    try:
-        if UMB_rsp["catsresult"] == "OK":
-            UMB_activities = UMB_rsp["requests"]
-        else:
-            umblogger.log_debug(0,"Error in getting security report" + rsp["info"])
-            return
-    except Exception as err:
-        umblogger.log_debug(1,"no umbrella response")
-        return
-
-    # loop through all security events, filter out the UMB_category events, add to dictionary
-#    i = 0
-    for activity in UMB_activities:
-#        i = i+1
-        umblogger.log_debug(4,"{}".format(json.dumps(activity)))
-        # retrieve mac address and user for IP
-        internalIP = activity["internalIp"]
-        observable = activity["destination"]
-        thishostname = ""
-        if activity["originType"] == "Anyconnect Roaming Client":
-            thishostname = activity["originLabel"]
-        eventDetails = {
-            'UMB_mac' : "",
-            'UMB_internalIp' : internalIP,
-            'UMB_externalIp' : activity["externalIp"],
-            'UMB_destination' : observable,
-            'UMB_datetime' : activity["datetime"],
-            'UMB_category' : activity["categories"],
-            'UMB_hostname' : thishostname
-            }
-        
-        penaltiesUMB = rtcConfig["umbrellaEventsConfig"]
-        penaltyMac = 0
-        for alarm in penaltiesUMB:
-            if alarm["event_name"] in activity["categories"]:   ### ASSUMPTION not sure of it is called "eventid", we should check
-                    penaltyMac += int(alarm["penalty"])
-        if penaltyMac == 0:
-            continue
-
-
-        rsp = pxgrid.getSessions(ip=internalIP)
-        if rsp:
-            thismac  = rsp["macAddress"]
-            eventDetails["UMB_mac"] = thismac            
-            thisuser = rsp["userName"]
-            thisIP = internalIP
-        else:
-            thisIP = internalIP
-            thismac = ""
-            thisuser = ""
-
-        rsp = db.getUMBevents(mac=thismac,user=thisuser,ip=thisIP,hostname=thishostname,observable=observable)                                                 
-        if not rsp["events"]:
-
-            # this event with this observable has not happened before, so apply penalty!
-            umblogger.log_debug(2,"New event found - {},{},{},{}".format(thismac,thisIP,thisuser,json.dumps(eventDetails)))
-            db.insertUMBevent(mac=thismac,user=thisuser,ip=thisIP,hostname=thishostname,observable=observable,penalty=penaltyMac,eventstring=json.dumps(eventDetails))            
-            if thismac:                                                                                                   
-
-                db.updateHost(mac=thismac,penalty=penaltyMac)
-                dbresult = db.getHosts(mac=thismac)
-                thishost = dbresult["hosts"][0]
-                if int(thishost["penalty"]) >= int(threshold):
-                    umblogger.log_debug(0,"Applying ANC policy for IP {} MAC {}".format(internalIP,thismac))
-                    ise_anc.applyPolicy(internalIP,thismac,ancpolicy)
-            if thisuser:
-                db.updateUser(user=thisuser,penalty=penaltyMac)
-            if thisIP:
-                db.updateIP(ip=thisIP,penalty=penaltyMac)
-            if thishostname:
-                umblogger.log_debug(2,"Inserting Hostname event {} penalty {}".format(thishostname,penaltyMac))
-                db.updateHostname(hostname=thishostname,penalty=penaltyMac)
-                if int(thishostname["penalty"]) >= int(threshold):
-                    amp.startHostIsolation(eventDetails["AMP_connector_guid"])
-                else:
-                    umblogger.log_debug(2,"Not Inserting Hostname event {} penalty {}".format(thishostname,penaltyMac))
-                
-        else:
-            umblogger.log_debug(4,"Event from this mac/user to thid observable already in DB")
-
-def mainUMB(threadname,thresholdLogLevel,logfilename):
-    umblogger = rtclogger.LOGGER("UMB",thresholdLogLevel,logfilename)    
-    umblogger.log_debug(0,"starting UMB thread with log level {}".format(str(thresholdLogLevel)))    
-    db = rtcdb.RTCDB()
-    dbresult = db.getRTCconfig()
-    rtcConfig = json.loads(dbresult["configstring"])
-    dbresult = db.getISEconfig()
-    creds = json.loads(dbresult["configstring"])
-    ISE_SERVER = creds["ise_server"]
-    ISE_USERNAME = creds["ise_username"]
-    ISE_PASSWORD = creds["ise_password"]
-    PXGRID_CLIENT_CERT = creds["pxgrid_client_cert"]
-    PXGRID_CLIENT_KEY = creds["pxgrid_client_key"]
-    PXGRID_CLIENT_KEY_PASSWORD = creds["pxgrid_client_key_pw"]
-    PXGRID_SERVER_CERT = creds["pxgrid_server_cert"]
-    PXGRID_NODENAME = creds["pxgrid_nodename"]
-    pxgrid = cats.ISE_PXGRID(server=ISE_SERVER,username=ISE_USERNAME,password=ISE_PASSWORD,debug=False,logfile="",clientcert=PXGRID_CLIENT_CERT,clientkey=PXGRID_CLIENT_KEY,clientkeypassword=PXGRID_CLIENT_KEY_PASSWORD,servercert=PXGRID_SERVER_CERT,nodename=PXGRID_NODENAME)
-
-    # from cats.py create object to do ISE ANC's with
-    ise_anc = cats.ISE_ANC(ISE_SERVER,ISE_USERNAME,ISE_PASSWORD,debug=False)
-    ancpolicy = rtcConfig["rtcPolicyName"]
-    dbresult = db.getUMBRELLAconfig()
-    creds = json.loads(dbresult["configstring"])
-
-    UMB_investigate_token = creds["u_investigate_token"]
-    UMB_enforce_token = creds["u_enforce_token"]
-    UMB_orgid = creds["u_orgid"]
-    UMB_secret = creds["u_secret"]
-    UMB_key = creds["u_key"]
-    
-    # log in to UMBRELLA
-    umb = cats.UMBRELLA(investigate_token=UMB_investigate_token,enforce_token=UMB_enforce_token,key=UMB_key,secret=UMB_secret,orgid=UMB_orgid,debug=False)
-    # need amp object to for host isolation from UMB
-    dbresultAMP = db.getAMPconfig()
-    credsAMP = json.loads(dbresultAMP["configstring"])    
-    AMP_cloud = "us"
-    # Hakan - currently not configurable, a todo
-    AMP_api_client_id = credsAMP["amp_api_client_id"] 
-    AMP_api_key = credsAMP["amp_api_key"]
-
-
-    # Create AMP object to retrieve events
-    amp = cats.AMP(cloud=AMP_cloud,api_client_id=AMP_api_client_id,api_key=AMP_api_key,debug=False,logfile="")
-    
-    while True:
-        try:
-            RtcUMB(umblogger,ancpolicy,rtcConfig,db,umb,amp,ise_anc,pxgrid)
-            time.sleep(59)            
-        except Exception as err:
-            umblogger.log_debug(0,exception_info(err))            
+        eventDetailsArr = []
+        eventDetailsArr.append(eventDetails)
+        return (eventDetailsArr)
     
 
+class rtcAMP(rtcBASE):
+    def __init__(self,threadname,logthreshold,logfilename):
+        rtcBASE.__init__(self,threadname,logthreshold,logfilename)
+        self.penalties = self.rtcConfig["ampEventsConfig"]  
+
         
-def RtcAMP(amplogger,ancpolicy,rtcConfig,db,amp,ise_anc,pxgrid):
+    def getEvents(self):
+        AMP_rsp = self.amp.events(minutes=2) 
+        events = AMP_rsp["data"]
+        return events
 
-    # retrieve config for penalties
-    threshold = rtcConfig["rtcThreshold"]
-    penaltiesAMP = rtcConfig["ampEventsConfig"]  
-
-    # use cats to query security events, then filter for AMP_category events and put into dict
-
-    amplogger.log_debug(3,"Getting AMP events")
-    AMP_rsp = amp.events(minutes=2) 
-    AMP_activities = AMP_rsp["data"]
-
-    # loop through all events, filter out interesting stuff
-    for activity in AMP_activities:
-        amplogger.log_debug(3,"Got AMP events")        
-        # loop through network addresses (if they are there) and filling them into dict
-        try:
-            AMP_MAC = {}
-            AMP_IP = {}
-            if "network_addresses" in activity["computer"]:
-                amplogger.log_debug(3,"found network address")            
-                for index, item in enumerate(activity["computer"]["network_addresses"]):
-                    AMP_MAC[int(index)] = item["mac"]
-                    AMP_IP[int(index)] = item["ip"]
-            else:
-                amplogger.log_debug(3,"did not find  network address")                        
-                continue
-        except Exception as err:
-            amplogger.log_debug(0,exception_info(err))
-            continue
-#            print(json.dumps(activity,indent=4,sort_keys=True))
+    def getPenaltyForEvent(self,event):
+        total = 0
+        for penalty in self.penalties:
+            if str(penalty["eventid"]) == str(event["event_type_id"]):
+                total += int(penalty["penalty"])
+        return total
     
+    def isEventStored(self,mac="",user="",ip="",hostname="",observable=""):
+        rsp = self.db.getAMPevents(mac=mac,user=user,ip=ip,hostname=hostname,observable=observable)                      
+        if rsp["events"]:
+            return True
+        return False
 
-        # create bool that becomes true if a new event needs to be created
-        new_event = False
+    def storeEvent(self,mac="",user="",ip="",hostname="",observable="",penalty=0,eventstring=""):
+        self.db.insertAMPevent(mac=mac,user=user,ip=ip,hostname=hostname,observable=observable,penalty=penalty,eventstring=eventstring)
 
-        # loop through different MAC addresses and create entry for each.... this should be grouped!!!
+    def getInfoFromEvent(self,event):
 
-        for macAddress,index in enumerate(AMP_MAC):
+        eventDetailsArr = []
+        if "computer" in event and "hostname" in event["computer"]:
+            hostname = event["computer"]["hostname"]
+        else:
+            hostname = "no hostname found"
+        if "file" in event and "identity" in event["file"]:
+            observable = event["file"]["identity"]["sha256"]
+        else:
+            observable = "no hash found"
+        
+        if "network_addresses" in event["computer"]:
+            self.logger.log_debug(3,"found network address")
+            for index, item in enumerate(event["computer"]["network_addresses"]):
 
-            try:
-                internalIP = AMP_IP[index]
-                    # check if hostname input is there
-                if "hostname" in activity["computer"]:
-                    AMP_hostname = activity["computer"]["hostname"]
-                else:
-                    AMP_hostname = "no hostname found"
-                # check if hash input is there
-                if "file" in activity and "identity" in activity["file"]:
-                    observable = activity["file"]["identity"]["sha256"] 
-                else:
-                    observable = "no hash found"
-
-                # initialize penaltyMac
-                penaltyMac = 0
-                # loop through all alarms, check if penalties configured for that alarm and then add penalty points accordingly
-                for alarm in penaltiesAMP:
-                    if str(alarm["eventid"]) == str(activity["event_type_id"]):
-                        penaltyMac += int(alarm["penalty"])
-                if penaltyMac == 0:
-                    # no need to insert if penalty 0
-                    continue
-                
-                # create temp dictionary to send to DB
                 eventDetails = {
-                    'AMP_hash' : observable,
-                    'AMP_connector_guid' : activity["connector_guid"],
-                    'AMP_event_type' : activity["event_type"],                    
-                    'AMP_date' : activity["date"],
-                    'AMP_hostname' : AMP_hostname,
-                    'AMP_MAC' : AMP_MAC,
-                    'AMP_IP' : internalIP
+                    'mac' : item["mac"],
+                    'ip'  : item["ip"],
+                    'hostname' : hostname,
+                    'username' : '',
+                    'observable' : observable,
+                    'AMP_connector_guid' : event["connector_guid"],
+                    'AMP_event_type' : event["event_type"],                    
+                    'AMP_date' : event["date"],
+                    'AMP_hostname' : hostname,
                 }
-                amplogger.log_debug(3,json.dumps(eventDetails))
+                eventDetailsArr.append(eventDetails)
                 
-                if not internalIP:
-                    continue
-                
-                rsp = pxgrid.getSessions(ip=internalIP)
-                thishostname = AMP_hostname
-                if rsp:
-                    thismac  = AMP_MAC[index]
-                    thisuser = rsp["userName"]
-                    thisIP = internalIP
-                else:
-                    ## track this IP still...
-                    amplogger.log_debug(3,"No info from pxGrid...{} ".format(internalIP) )
-                    thisIP = internalIP
-                    thismac = ""
-                    thisuser = ""
-                    
-                rsp = db.getAMPevents(mac=thismac,user=thisuser,ip=thisIP,hostname=thishostname,observable=observable)
-                if rsp["events"]:
-                    ## event already observed, as for now no more penalties, ... 
-                    pass
-                else:
-                    amplogger.log_debug(2,"Inserting AMP event {}".format(json.dumps(eventDetails)))
-                    db.insertAMPevent(mac=thismac,user=thisuser,ip=thisIP,hostname=thishostname,observable=observable,penalty=penaltyMac,eventstring=json.dumps(eventDetails))                    
-                    # check if there is a mac address, and if so insert event in DB, update host and do ANC if needed
-                    if thismac:
+        else:
+            self.logger.log_debug(3,"did not find network address")
+        
+        return (eventDetailsArr)
+    
+def mainRTC(threadname,rtc):
 
-                        db.updateHost(mac=thismac,penalty=penaltyMac)
-
-                        # grab current penalties for the host
-                        dbresult = db.getHosts(mac=thismac)
-                        thishost = dbresult["hosts"][0]
-                        # check if penalties are equal or higher then threshold
-                        if int(thishost["penalty"]) >= int(threshold):
-#                        rsp = anc.macPolicy(thishost["mac"])
-# skip this check since it is causing up to 2 API calls instead of max one
-                         # check if ANC was already performed, if not do ANC
-                         # rsp contains an array of MACs
-                            amplogger.log_debug(1,"Applying ANC policy for IP {} MAC {} Policy {}".format(internalIP,thismac,ancpolicy))
-                            ise_anc.applyPolicy(internalIP,thismac,ancpolicy)
-                        # update user
-                    else:
-                        amplogger.log_debug(3,"This mac was not defined...{}".format(thismac))
-                    if thisuser:
-                        amplogger.log_debug(2,"Inserting user event {} penalty {}".format(thisuser,penaltyMac))
-                        db.updateUser(user=thisuser,penalty=penaltyMac)
-                    if thisIP:
-                        amplogger.log_debug(2,"Inserting IP event {} penalty {}".format(thisIP,penaltyMac))
-                        db.updateIP(ip=thisIP,penalty=penaltyMac)
-                    if thishostname:
-                        amplogger.log_debug(2,"Inserting Hostname event {} penalty {}".format(thishostname,penaltyMac))
-                        db.updateHostname(hostname=thishostname,penalty=penaltyMac)
-                        if int(thishostname["penalty"]) >= int(threshold):
-                            amp.startHostIsolation(eventDetails["AMP_connector_guid"])
-                            
-                    else:
-                        amplogger.log_debug(2,"Not Inserting Hostname event {} penalty {}".format(thishostname,penaltyMac))
-            except Exception as err:
-                amplogger.log_debug(0,exception_info(err))                                        
-            
-
-def mainAMP(threadname,thresholdLogLevel,logfilename):
-    amplogger = rtclogger.LOGGER("AMP",thresholdLogLevel,logfilename)
-    amplogger.log_debug(0,"starting AMP thread with log level {}".format(str(thresholdLogLevel)))        
-    db = rtcdb.RTCDB()
-    dbresult = db.getRTCconfig()
-    rtcConfig = json.loads(dbresult["configstring"])
-    dbresult = db.getISEconfig()
-    creds = json.loads(dbresult["configstring"])
-    ISE_SERVER = creds["ise_server"]
-    ISE_USERNAME = creds["ise_username"]
-    ISE_PASSWORD = creds["ise_password"]
-    PXGRID_CLIENT_CERT = creds["pxgrid_client_cert"]
-    PXGRID_CLIENT_KEY = creds["pxgrid_client_key"]
-    PXGRID_CLIENT_KEY_PASSWORD = creds["pxgrid_client_key_pw"]
-    PXGRID_SERVER_CERT = creds["pxgrid_server_cert"]
-    PXGRID_NODENAME = creds["pxgrid_nodename"]
-    pxgrid = cats.ISE_PXGRID(server=ISE_SERVER,username=ISE_USERNAME,password=ISE_PASSWORD,debug=False,logfile="",clientcert=PXGRID_CLIENT_CERT,clientkey=PXGRID_CLIENT_KEY,clientkeypassword=PXGRID_CLIENT_KEY_PASSWORD,servercert=PXGRID_SERVER_CERT,nodename=PXGRID_NODENAME)
-
-    # from cats.py create object to do ISE ANC's with
-    ise_anc = cats.ISE_ANC(ISE_SERVER,ISE_USERNAME,ISE_PASSWORD,debug=False)
-#    ancpolicy = "Quarantine"
-    ancpolicy = rtcConfig["rtcPolicyName"]
-
-    # retrieve credentials
-    dbresult = db.getAMPconfig()
-    creds = json.loads(dbresult["configstring"])
-
-    AMP_cloud = "us"  # Hakan - currently not configurable, a todo
-    AMP_api_client_id = creds["amp_api_client_id"] 
-    AMP_api_key = creds["amp_api_key"]
-
-
-    # Create AMP object to retrieve events
-    amp = cats.AMP(cloud=AMP_cloud,api_client_id=AMP_api_client_id,api_key=AMP_api_key,debug=False,logfile="")
-
-    # create infinite loop, set to 60 seconds
     while True:
         try:
-            RtcAMP(amplogger,ancpolicy,rtcConfig,db,amp,ise_anc,pxgrid)
-            time.sleep(30)            
+            rtc.loopEvents()
+            time.sleep(59)                                    
         except Exception as err:
-            amplogger.log_debug(0,exception_info(err))                        
-
-
+            rtc.logger.log_debug(0,rtc.logger.exception_info(err))            
+            time.sleep(59)                                    
 def print_help():
     print("rtcMain -a <log threshold for AMP> -u <log Threshold for UMB> -s <log Thresold for SW> -f <logfilename>")
     print("log thresholds between 0 (only critical logging) and 7 (log everything)")
     print("not specifying a log threshold will cause the thread not to be started")
     print("rtcMain -h")
+
 def main(argv):
 
     #options
@@ -507,6 +368,7 @@ def main(argv):
     SWlogThreshold = -1
     logfilename = ""
     try:
+        logger = rtclogger.LOGGER("main",1,"/tmp/rtc.log")    
         opts, args = getopt.getopt(argv,"ha:s:u:f:")
         for opt, arg in opts:
             if opt == '-h':
@@ -528,22 +390,24 @@ def main(argv):
     
     # start threads, second parameter is log level
     try:
-        if UMBlogThreshold != -1:            
-            _thread.start_new_thread(mainUMB,("UMBthread",UMBlogThreshold,logfilename))
-    except:
-        print("Unable to start new UMB thread")
+        if UMBlogThreshold != -1:
+            rtc = rtcUMB("UMB",UMBlogThreshold,logfilename)
+            _thread.start_new_thread(mainRTC,("UMB",rtc))
+    except Exception as err:
+        logger.log_debug(1,"Unable to start new UMB thread "+logger.exception_info(err))
 
     try:
         if AMPlogThreshold != -1:
-            _thread.start_new_thread(mainAMP,("AMPthread",AMPlogThreshold,logfilename))
-    except:
-        print("Unable to start new AMP thread")
-
+            rtc = rtcAMP("AMP",AMPlogThreshold,logfilename)            
+            _thread.start_new_thread(mainRTC,("AMP",rtc))
+    except Exception as err:        
+        logger.log_debug(1,"Unable to start new AMP thread "+logger.exception_info(err))        
     try:
         if SWlogThreshold != -1:
-            _thread.start_new_thread(mainSW,("SWthread",SWlogThreshold,logfilename))
-    except:
-        print("Unable to start new SW thread")
+            rtc = rtcSW("SW",SWlogThreshold,logfilename)            
+            _thread.start_new_thread(mainRTC,("SW",rtc))
+    except Exception as err:        
+        logger.log_debug(1,"Unable to start new SW thread "+logger.exception_info(err))                
         
     while True:
         time.sleep(1)

@@ -36,8 +36,12 @@ def main(argv):
         API_CLIENT_ID = creds["amp_api_client_id"]
         API_KEY = creds["amp_api_key"]
         a = cats.AMP(cloud="us",api_client_id=API_CLIENT_ID,api_key=API_KEY,debug=False,logfile="/tmp/rtcAMPevents.log")
-        rsp = a.events(days=days,hours=hours,minutes=minutes)
-        rsp.update({"rtcResult":"OK"})
+        amp_rsp = a.events(days=days,hours=hours,minutes=minutes)
+        
+        rsp = {"rtcResult":"OK"}
+        rsp.update({"events": amp_rsp["data"]})
+
+
     except Exception as err:
         rsp = {"rtcResult": mylogger.exception_info(err)}
     print("Content-type:application/json\n\n")

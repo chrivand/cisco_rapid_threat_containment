@@ -36,35 +36,35 @@ def main(argv):
 
         amp = cats.AMP(cloud="us",api_client_id=AMP_api_client_id,api_key=AMP_api_key,debug=debug,logfile="")
         
-        rsp = dbconn.getUsers()
-        users = rsp["users"]
-        mylogger.log_debug(7,json.dumps(users))
-        for u in users:
-            mylogger.log_debug(7,"User is ".format(json.dumps(u)))
-
+        ### now get info on IPs
+        rsp = dbconn.getIPs()
+        ips = rsp["ips"]
+        mylogger.log_debug(7,json.dumps(ips))
+        for thisip in ips:
+            mylogger.log_debug(7,"IP is ".format(json.dumps(thisip)))
 
             try:
-                rsp = dbconn.getAMPevents(user=u["user"])
-                u.update({"ampevents":rsp})
+                rsp = dbconn.getAMPevents(ip=thisip["ip"])
+                thisip.update({"ampevents":rsp})
             except Exception as err:
                 estring = mylogger.exception_info(err)
                 print(estring)
-                u.update({"ampevents":{} })
+                thisip.update({"ampevents":{} })
 
             try:
-                rsp = dbconn.getSWevents(user=u["user"])
-                u.update({"swevents":rsp})
+                rsp = dbconn.getSWevents(ip=thisip["ip"])
+                thisip.update({"swevents":rsp})
             except Exception as err:
-                u.update({"swevents":{} })
+                thisip.update({"swevents":{} })
                 
             try:
-                rsp = dbconn.getUMBevents(user=u["user"])
-                u.update({"umbevents":rsp})
+                rsp = dbconn.getUMBevents(ip=thisip["ip"])
+                thisip.update({"umbevents":rsp})
             except Exception as err:
-                u.update({"umbevents":{} })
+                thisip.update({"umbevents":{} }) 
 
         rsp = {"rtcResult":"OK"}
-        rsp.update({"items": users})
+        rsp.update({"items": ips})
         rsp.update({"recurring":recurring})
     except Exception as err:
         rsp = {"rtcResult": mylogger.exception_info(err)}

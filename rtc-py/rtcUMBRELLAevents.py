@@ -39,8 +39,10 @@ def main(argv):
         
         u = cats.UMBRELLA(investigate_token=API_INVESTIGATE_TOKEN,enforce_token=API_ENFORCE_TOKEN,key=API_KEY,secret=API_SECRET,orgid=API_ORGID,debug=debug,logfile="")
 
-        rsp = u.reportSecurityActivity(days=days,hours=hours,minutes=minutes)
-        rsp.update({"rtcResult":"OK"})
+        umb_rsp = u.reportSecurityActivity(days=days,hours=hours,minutes=minutes)
+        rsp = {"rtcResult":"OK"}
+        rsp.update({"events": umb_rsp["requests"]})
+
         print("Content-type:application/json\n\n")
         print(json.dumps(rsp))
 

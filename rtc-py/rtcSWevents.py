@@ -38,8 +38,10 @@ def main(argv):
 #        print("connecting to ....{} {} {}".format(SW_SERVER,SW_USERNAME,SW_PASSWORD))
 
         sw = cats.SW(server=SW_SERVER,username=SW_USERNAME,password=SW_PASSWORD,debug=False)
-        rsp = sw.searchSecurityEvents(days=days,hours=hours,minutes=minutes,sourceip="",targetip="",wait=5)
-        rsp.update({"rtcResult":"OK"})
+        sw_rsp = sw.searchSecurityEvents(days=days,hours=hours,minutes=minutes,sourceip="",targetip="",wait=5)
+        rsp = {"rtcResult":"OK"}
+        rsp.update({"events": sw_rsp["data"]["results"]})
+
     except Exception as err:
         rsp = {"rtcResult": mylogger.exception_info(err)}
     print("Content-type:application/json\n\n")

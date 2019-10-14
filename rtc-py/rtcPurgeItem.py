@@ -29,11 +29,11 @@ def main(argv):
             debug = True
             table = input("Enter table to purge:")            
             name = input("Enter name to purge:")
-        if table == "hosts" or table == "hostname" or table == "user" or table == "IP":
+        if table == "mac" or table == "hostname" or table == "user" or table == "ip":
             dbconn = rtcdb.RTCDB()
-            if table == "IP":
+            if table == "ip":
                 rsp = dbconn.deleteIP(name)
-            if table == "host":
+            if table == "mac":
                 rsp = dbconn.deleteHost(name)
             if table == "hostname":
                 rsp = dbconn.deleteHostname(name)
