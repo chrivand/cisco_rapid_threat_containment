@@ -1,0 +1,25 @@
+version: '3'
+services:
+  db:
+    image: 'mongo'
+    ports:
+    - "27017-27019:27017-27019"
+    volumes:
+    - my-vol:/data/db
+    - mongoconfig:/data/configdb
+    networks:
+    - my-net
+  web:
+    depends_on:
+    - "db"
+    image: drnop/rtc:latest
+    ports:
+     - "80:80"
+    networks:
+    - my-net
+networks:
+  my-net:
+    driver: bridge
+volumes:
+  my-vol:
+  mongoconfig:

@@ -1,0 +1,81 @@
+<!DOCTTYPE HTML5>
+<html>
+
+  <head><title>Rapid Threat Containers</title>
+    <meta charset="utf-8"/>
+    <script src="rtc.js"></script>
+    <script src="FileSaver.js"></script>
+  <link rel="stylesheet" type="text/css" href="rtc.css">
+
+<link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.3.1/css/all.css" integrity="sha384-mzrmE5qonljUremFsqc01SB46JvROS7bZs3IO2EmfFsd15uHvIt+Y8vEf7N7fWAU" crossorigin="anonymous">
+
+
+</head>
+  <body onload="getStarted()">
+  <div id="wrapper">
+    <div id="divMenu" class="sidenav">
+      <a href="#mAbout" onclick="mAbout()">About</a>
+      <a href="#hostView" onclick="mHostView()">Host View</a>            
+      <a href="#userViews" onclick="mUserView()">User View</a>
+      <a href="#ipViews" onclick="mIPview()">IP View</a>
+      <a href="#hostnameViews" onclick="mHostnameView()">Hostname View</a>
+      
+      <button class="dropdown-btn">Configure APIs
+	<i class="fa fa-caret-down"></i>
+      </button>
+      <div class="dropdown-container">        
+      <a href="#editStealthwatch" onclick="mEditSW()">Configure Stealthwatch</a>            
+      <a href="#editISE" onclick="mEditISE()">Configure ISE</a>
+      <a href="#editAD" onclick="mEditAD()">Configure AD</a>      
+      <a href="#editAMP" onclick="mEditCTR()">Configure CTR</a>      
+      <a href="#editAMP" onclick="mEditAMP()">Configure AMP</a>
+      <a href="#editUmbrella" onclick="mEditUmbrella()">Configure Umbrella</a>
+      </div>
+      
+      <button class="dropdown-btn">Search APIs
+	<i class="fa fa-caret-down"></i>
+      </button>
+      <div class="dropdown-container">      
+      <a href="#listSWevents" onclick="mStealthwatchEvents()">Stealthwatch Events</a>
+      <a href="#listAMPevents" onclick="mAMPevents()">AMP Events</a>
+      <a href="#listUmbrellaevents" onclick="mUmbrellaEvents()">Umbrella Events</a>
+      <a href="#listISEsessions" onclick="mISEsessions()">ISE Sessions</a>
+      </div>
+      <button class="dropdown-btn">RTC Management
+	<i class="fa fa-caret-down"></i>
+      </button>
+      <div class="dropdown-container">
+        <a href="#editRTC" onclick="mEditRTC()">Rapid Threat Containment Options</a>      	
+	<a href="#backup" onclick="mRTCbackup()">Backup/Restore RTC Config</a>
+	<a href="#RTC process" onclick="mRTCprocess()">RTC Process</a>      
+	<a href="#database" onclick="mRTCdatabase()">Reset/Create Database</a>
+      </div>
+
+    </div>
+    <div id="divContent" class="main">
+      <div id="divLabrats"><img src="labrats.png" height="85%"></div>
+      <div id="divRetCode"></div>
+      <div id="divChild" class="container"></div>
+    </div>
+  </div>
+
+      <script>
+/* Loop through all dropdown buttons to toggle between hiding and showing its dropdown content - This allows the user to have multiple dropdowns without any conflict */
+var dropdown = document.getElementsByClassName("dropdown-btn");
+var i;
+
+for (i = 0; i < dropdown.length; i++) {
+  dropdown[i].addEventListener("click", function() {
+  this.classList.toggle("active");
+  var dropdownContent = this.nextElementSibling;
+  if (dropdownContent.style.display === "block") {
+  dropdownContent.style.display = "none";
+  } else {
+  dropdownContent.style.display = "block";
+  }
+  });
+}
+</script>
+  
+</body>
+</html>
