@@ -39,7 +39,9 @@
 
  ## Installation
 
- This will be published at a later point in time. Please review the **system_overview.pdf** file for now. Please contact us for further explanantion.
+On a system with docker and docker-compose installed, copy the docker-compose.yml file to a directory and run docker-compose up.
+This should download and start two containers, rtc and the database container (mongodb).
+Then browse to your localhost.
 
  ## Authors
 
