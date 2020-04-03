@@ -4,6 +4,11 @@
 
  The created system contained 3 major components. The first component is responsible for retrieving and correlating the security events, and quarantining the endpoints. The second component takes care of controlling the database that contained the contextual information about the quarantined endpoints. The last component is in charge of the created GUI, which also has some functionality to query additional information, cross-launch into CTR, and to unquarantine the endpoints.
 
+## Release notes RTC version 3.0
+Now quick installation with containers (docker-compose)
+Changing database from mysql to mongodb
+GUI improvements
+
 ## Release notes RTC version 2.0
 * AMP Host Isolation added 
 * Stealthwatch Source/Target identification enhancement
